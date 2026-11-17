@@ -62,4 +62,43 @@
     {% endfor %}
   </table>
 </div>
+
+<div class="card">
+  <h2>素材包与制包作业（输入更正后旧包停止下载）</h2>
+  <table>
+    <tr><th>素材包</th><th>清单</th><th>版本</th><th>状态</th><th>张数/大小</th><th>说明</th></tr>
+    {% for p in packages %}
+    <tr>
+      <td>#{{ p.id }}</td>
+      <td>#{{ p.manifest_id }}</td>
+      <td>v{{ p.version_id }}</td>
+      <td>{% if p.status=='published' %}<span class="tag ok">当前</span>
+          {% elif p.status=='superseded' %}<span class="tag hist">已停供</span>
+          {% else %}<span class="tag fail">失败</span>{% endif %}</td>
+      <td class="muted">{{ p.entry_count }} 张 ｜ {{ (p.size_bytes / 1024 / 1024)|round(2) }} MiB</td>
+      <td class="muted">{{ p.fail_reason or p.file_name }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">暂无素材包</td></tr>
+    {% endfor %}
+  </table>
+  <table style="margin-top:14px">
+    <tr><th>制包作业</th><th>清单/版本</th><th>状态</th><th>阶段</th><th>原因摘要</th><th>时间</th><th></th></tr>
+    {% for j in package_jobs %}
+    <tr>
+      <td>#{{ j.id }}</td>
+      <td>#{{ j.manifest_id }} / v{{ j.version_id }}</td>
+      <td>{% if j.status=='succeeded' %}<span class="tag ok">成功</span>
+          {% elif j.status=='failed' %}<span class="tag fail">失败</span>
+          {% else %}<span class="tag run">{{ j.status }}</span>{% endif %}</td>
+      <td>{{ j.fail_stage or '—' }}</td>
+      <td class="muted" style="max-width:420px">{{ (j.reason or '')[:120] }}{% if j.reason and j.reason|length>120 %}…{% endif %}</td>
+      <td class="muted">{{ j.created_at }}</td>
+      <td><a class="btn small secondary" href="{{ url_for('package_job_detail', job_id=j.id) }}">查看</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">暂无制包作业</td></tr>
+    {% endfor %}
+  </table>
+</div>
 {% endblock %}

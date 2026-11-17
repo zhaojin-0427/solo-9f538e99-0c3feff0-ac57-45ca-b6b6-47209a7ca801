@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}制包作业 #{{ job.id }}{% endblock %}
+{% block body %}
+<div class="card" id="package-job-card">
+  <h2>素材制包作业 #{{ job.id }}
+    {% if job.status=='succeeded' %}<span class="tag ok">成功</span>
+    {% elif job.status=='failed' %}<span class="tag fail">失败</span>
+    {% else %}<span class="tag run">{{ job.status }}</span>{% endif %}
+    <span class="muted">（依据清单 #{{ job.manifest_id }} / 版本 v{{ job.version_id }}）</span>
+  </h2>
+  <p class="muted">
+    上传文件：{{ job.source_name or '—' }}
+    {% if job.source_size %}｜ {{ job.source_size }} 字节{% endif %}
+    {% if job.source_sha256 %}｜ SHA-256 <code>{{ job.source_sha256 }}</code>{% endif %}
+  </p>
+  <p class="muted">创建 {{ job.created_at }} ｜ 开始 {{ job.started_at or '—' }} ｜ 完成 {{ job.finished_at or '—' }}</p>
+
+  {% if job.status in ('queued','running') %}
+  <p><span class="tag run" id="pkg-st">正在校验素材并制包，页面自动刷新……</span></p>
+  {% endif %}
+
+  {% if job.status == 'failed' %}
+  <h2 style="color:#b91c1c">未生成素材包（阶段：{{ job.fail_stage }}）</h2>
+  <div class="reason">{{ job.reason }}</div>
+  <p class="muted" style="margin-top:8px">
+    当前清单共 {{ expected_images }} 张图像；本次已通过校验 {{ detail.checked_images if detail and detail.checked_images is defined else 0 }} 张。
+  </p>
+  {% if detail and detail.problems %}
+  <p class="muted" style="margin-top:12px">问题清单（共 {{ detail.problems|length }} 项）：</p>
+  <table>
+    <tr><th>类别</th><th>图像号</th><th>位置</th><th>说明</th></tr>
+    {% for p in detail.problems %}
+    <tr>
+      <td>{{ p.stage }}</td>
+      <td>{{ p.image_no or '—' }}</td>
+      <td class="muted">{% if p.line %}files.csv 行 {{ p.line }}{% endif %} {{ p.path or '' }}</td>
+      <td>{{ p.message }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% if detail and not detail.problems %}
+    {% if detail.unmapped_files %}
+    <p class="muted" style="margin-top:12px">
+      提示：ZIP 内以下 <code>images/</code> 文件未被任何清单图像映射，已忽略（只打包清单图像）：
+    </p>
+    <pre>{{ detail.unmapped_files | join('\n') }}</pre>
+    {% endif %}
+  {% endif %}
+  {% endif %}
+
+  {% if package %}
+  <h2 style="margin-top:18px">素材包 #{{ package.id }}（{{ package.entry_count }} 张）
+    <span class="tag {{ 'ok' if package.status=='published' else 'hist' }}">{{ package.status }}</span>
+  </h2>
+  <p class="muted">
+    文件：<code>{{ package.file_name }}</code> ｜ {{ package.size_bytes }} 字节 ｜
+    SHA-256：<code>{{ package.sha256 }}</code> ｜ 生成于 {{ package.created_at }}
+  </p>
+  {% if downloadable %}
+  <a class="btn" href="{{ url_for('package_download', package_id=package.id) }}">下载素材包</a>
+  {% else %}
+  <div class="reason">该素材包已不可下载：所属输入版本已被更正或清单已被替换，旧包停止下载。</div>
+  {% endif %}
+  {% endif %}
+
+  <p style="margin-top:16px">
+    <a class="btn secondary small" href="{{ url_for('index') }}">返回当前版本</a>
+    <a class="btn secondary small" href="{{ url_for('history') }}">历史</a>
+  </p>
+</div>
+
+{% if job.status in ('queued','running') %}
+<script>
+poll = setInterval(function () {
+  fetch('{{ url_for("package_job_status", job_id=job.id) }}').then(r => r.json()).then(d => {
+    if (d.done) { clearInterval(poll); location.reload(); }
+  }).catch(() => {});
+}, 1000);
+</script>
+{% endif %}
+{% endblock %}

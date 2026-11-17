@@ -3,6 +3,7 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DB_PATH=/data/pathology.db \
+    PACKAGE_DIR=/data/packages \
     PORT=8080
 
 WORKDIR /app

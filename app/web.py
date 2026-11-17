@@ -14,10 +14,12 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     url_for,
 )
 
 from .db import VALID, get_db
+from .packaging import MAX_SOURCE_BYTES
 from .parser import InputError
 from .service import Service
 
@@ -28,8 +30,16 @@ def create_app(db_path: str | None = None) -> Flask:
     db_path = db_path or os.environ.get("DB_PATH", "/data/pathology.db")
     synchronous = os.environ.get("PYX_SYNCHRONOUS", "0") == "1"
     solve_delay = float(os.environ.get("PYX_SOLVE_DELAY", "0"))
-    svc = Service(db_path, synchronous=synchronous, solve_delay=solve_delay)
+    package_delay = float(os.environ.get("PYX_PACKAGE_DELAY", "0"))
+    svc = Service(
+        db_path,
+        synchronous=synchronous,
+        solve_delay=solve_delay,
+        package_delay=package_delay,
+    )
     app.extensions["service"] = svc
+    # 上传体积：素材 ZIP 上限 + 表单余量（单件 5 MiB 的校验在制包时逐件执行）
+    app.config["MAX_CONTENT_LENGTH"] = MAX_SOURCE_BYTES + 8 * 1024 * 1024
 
     # ------------------------------------------------------------ 首页/仪表盘
     @app.route("/")
@@ -55,6 +65,8 @@ def create_app(db_path: str | None = None) -> Flask:
             quotas=quotas,
             val_counts=val_counts,
             train_counts=train_counts,
+            current_package=svc.current_package(),
+            package_jobs=svc.list_package_jobs(limit=5),
         )
 
     # ------------------------------------------------------------ 上传/更正
@@ -133,6 +145,75 @@ def create_app(db_path: str | None = None) -> Flask:
             "done": job["status"] in ("succeeded", "failed"),
         }
 
+    # ------------------------------------------------------------ 素材制包
+    @app.route("/packages", methods=["POST"])
+    def package_upload():
+        source = request.files.get("source_zip")
+        if not source or not source.filename:
+            flash("请选择素材 ZIP 文件（根目录需含 files.csv）", "error")
+            return redirect(url_for("index"))
+        try:
+            job_id = svc.start_package(source.filename, source.stream)
+        except InputError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("index"))
+        return redirect(url_for("package_job_detail", job_id=job_id))
+
+    @app.route("/packages/<int:job_id>")
+    def package_job_detail(job_id: int):
+        job = svc.get_package_job(job_id)
+        if job is None:
+            abort(404)
+        package = svc.get_package(job["package_id"]) if job["package_id"] else None
+        downloadable = (
+            svc.package_downloadable(package["id"]) if package is not None else None
+        )
+        detail = json.loads(job["detail"]) if job["detail"] else None
+        expected_images = len(svc.get_manifest_entries(job["manifest_id"]))
+        return render_template(
+            "package_job.html",
+            job=job,
+            package=package,
+            downloadable=downloadable,
+            detail=detail,
+            expected_images=expected_images,
+        )
+
+    @app.route("/packages/<int:job_id>/status")
+    def package_job_status(job_id: int):
+        job = svc.get_package_job(job_id)
+        if job is None:
+            abort(404)
+        return {
+            "id": job["id"],
+            "status": job["status"],
+            "fail_stage": job["fail_stage"],
+            "reason": job["reason"],
+            "done": job["status"] in ("succeeded", "failed"),
+        }
+
+    @app.errorhandler(413)
+    def too_large(_exc):
+        flash(
+            f"上传内容超过 {MAX_SOURCE_BYTES // (1024 * 1024)} MiB 上限，未生成素材包。",
+            "error",
+        )
+        return redirect(url_for("index")), 302
+
+    @app.route("/packages/<int:package_id>/download")
+    def package_download(package_id: int):
+        row = svc.package_downloadable(package_id)
+        if row is None:
+            flash("该素材包已不可下载：可能所属清单已被更正/替换或文件已清理。", "error")
+            return redirect(url_for("history"))
+        return send_file(
+            row["file_path"],
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=row["file_name"],
+            etag=row["sha256"],
+        )
+
     # ------------------------------------------------------------ 历史
     @app.route("/history")
     def history():
@@ -140,7 +221,12 @@ def create_app(db_path: str | None = None) -> Flask:
         jobs = svc.list_jobs(limit=100)
         manifests = svc.list_manifests()
         return render_template(
-            "history.html", versions=versions, jobs=jobs, manifests=manifests
+            "history.html",
+            versions=versions,
+            jobs=jobs,
+            manifests=manifests,
+            package_jobs=svc.list_package_jobs_all(limit=100),
+            packages=svc.list_packages(),
         )
 
     @app.route("/versions/<int:version_id>")

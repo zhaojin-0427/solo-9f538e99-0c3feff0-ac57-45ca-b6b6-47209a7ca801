@@ -88,6 +88,41 @@ CREATE TABLE IF NOT EXISTS partition_jobs (
     manifest_id INTEGER
 );
 
+-- 素材制包作业：每个作业对应一次上传的素材 ZIP，只服务当前已发布清单。
+CREATE TABLE IF NOT EXISTS package_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_id INTEGER NOT NULL REFERENCES input_versions(id),
+    manifest_id INTEGER NOT NULL REFERENCES manifests(id),
+    source_name TEXT,                              -- 用户上传文件名（仅展示）
+    source_path TEXT,                              -- 服务端临时文件，作业结束即清理
+    source_size INTEGER,
+    source_sha256 TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+    fail_stage TEXT,                               -- format | mapping | path | missing | digest | size | stale | restart | error
+    reason TEXT,
+    detail TEXT,
+    package_id INTEGER
+);
+
+-- 已发布素材包：manifest_id 唯一的“当前包”由部分唯一索引保证。
+CREATE TABLE IF NOT EXISTS material_packages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_id INTEGER NOT NULL REFERENCES input_versions(id),
+    manifest_id INTEGER NOT NULL REFERENCES manifests(id),
+    job_id INTEGER,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    entry_count INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('published', 'superseded')),
+    fail_reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- 同一输入版本至多一份已发布清单（失败记录可多条，用于历史/原因查看）。
 CREATE UNIQUE INDEX IF NOT EXISTS uq_manifest_published
     ON manifests(version_id) WHERE status = 'published';
@@ -96,6 +131,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_manifest_published
 -- 失败作业不占该约束位，允许更正后或针对同一输入重新发起重试。
 CREATE UNIQUE INDEX IF NOT EXISTS uq_job_active
     ON partition_jobs(version_id) WHERE status IN ('queued', 'running', 'succeeded');
+
+-- 同一清单至多一个正在执行的制包作业（顺序重传可替换旧包，旧 job 不占位），
+-- 以及至多一份已发布素材包。并发上传只有第一个能登记/发布，可下载的包始终只有一份。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_package_job_active
+    ON package_jobs(manifest_id) WHERE status IN ('queued', 'running');
+CREATE UNIQUE INDEX IF NOT EXISTS uq_package_published
+    ON material_packages(manifest_id) WHERE status = 'published';
 """
 
 
@@ -120,6 +162,13 @@ def init_db(db_path: str | Path) -> None:
             "UPDATE partition_jobs SET status='failed', fail_stage='restart', "
             "finished_at=datetime('now'), "
             "reason='服务重启，该任务未完成，未产生任何分配，请重新发起划分' "
+            "WHERE status IN ('queued','running')"
+        )
+        # 制包作业同理：中断的作业从未登记 material_packages，不会留下可下载半包。
+        conn.execute(
+            "UPDATE package_jobs SET status='failed', fail_stage='restart', "
+            "finished_at=datetime('now'), source_path=NULL, "
+            "reason='服务重启，该素材包未完成，未登记下载，请重新上传素材 ZIP' "
             "WHERE status IN ('queued','running')"
         )
     finally:

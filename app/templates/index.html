@@ -74,6 +74,47 @@
     {% endfor %}
   </table>
 </div>
+
+<div class="card">
+  <h2>⑤ 素材包（把清单对应图像原件按 train/val 打包，供训练程序直接读取）</h2>
+  <p class="muted">
+    上传素材 ZIP：根目录放 <code>files.csv</code>，列 <code>图像号,ZIP 内路径,SHA-256</code>；
+    每张清单图像须<strong>恰好</strong>映射到 <code>images/</code> 下的一个文件，单件不超过 5 MiB。
+    缺件、重复映射、摘要不符、越界路径都会指出原因且不生成包。
+  </p>
+  <form method="post" action="{{ url_for('package_upload') }}" enctype="multipart/form-data">
+    <input type="file" name="source_zip" accept=".zip,application/zip" required>
+    <button class="btn" type="submit" style="margin-left:10px">上传并制作素材包</button>
+  </form>
+  {% if current_package %}
+  <p style="margin-top:14px">
+    当前素材包 #{{ current_package.id }}（{{ current_package.entry_count }} 张，{{ (current_package.size_bytes / 1024 / 1024)|round(2) }} MiB）
+    <a class="btn small" style="margin-left:10px" href="{{ url_for('package_download', package_id=current_package.id) }}">下载当前素材包</a>
+  </p>
+  <p class="muted">SHA-256：<code>{{ current_package.sha256 }}</code> ｜ 生成于 {{ current_package.created_at }}</p>
+  {% else %}
+  <p class="muted" style="margin-top:14px">当前清单尚无可用素材包；上传素材 ZIP 后生成。</p>
+  {% endif %}
+  {% if package_jobs %}
+  <p class="muted" style="margin-top:14px">以下为最近 5 次制包作业；同一清单同时只保留一份制包作业，
+    重复上传同清单素材只会产生并下发一个当前包。</p>
+  <table style="margin-top:6px">
+    <tr><th>制包作业</th><th>状态</th><th>阶段</th><th>结果/原因</th><th>时间</th><th></th></tr>
+    {% for j in package_jobs %}
+    <tr>
+      <td>#{{ j.id }}</td>
+      <td>{% if j.status=='succeeded' %}<span class="tag ok">成功</span>
+          {% elif j.status=='failed' %}<span class="tag fail">失败</span>
+          {% else %}<span class="tag run">{{ j.status }}</span>{% endif %}</td>
+      <td>{{ j.fail_stage or '—' }}</td>
+      <td class="muted" style="max-width:480px">{{ (j.reason or '')[:110] }}{% if j.reason and j.reason|length>110 %}…{% endif %}</td>
+      <td class="muted">{{ j.created_at }}</td>
+      <td><a class="btn small secondary" href="{{ url_for('package_job_detail', job_id=j.id) }}">查看</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
 {% else %}
 <div class="card">
   <h2>④ 当前下载状态</h2>
